@@ -1,0 +1,196 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct  6 16:34:20 2016
+
+@author: xiaojian
+"""
+
+import datetime as dt
+import pandas as pd
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import numpy as np
+import csv
+from drifter_vs_model_function import get_drifter_track,get_fvcom,get_roms,calculate_SD,drifterhr
+######## Hard codes ##########
+drifter_data_type='erddap'#'raw''csv','erddap','npy'  the method of get drifter data
+Model=['30yr']#'GOM3','massbay','30yr','ROMS'# model want to be compair with drifter track
+drifter_ID =[]#if drifter_ID=[],get drifter id from list 
+drifter_list=[]#get from get_drifter_list code
+depth =[-1]
+track=20#how many drifter track you want compare
+days=10# for one drifter how many days want to compare #if use 'raw' max days is 3#how many drifter have how many data 
+track_days=1#each time how many days want to compair
+restart_days=1#the day you want to restart compair
+start_times =[dt.datetime(2010,5,19,9,13,0,0)]#if have drifter_ID it will be use how many drifter have how many data 
+wind_get_type='FVCOM'#'NCEP'
+wind=0#if you don't want have wind correct,wind =0 
+######## Drifter and model track ##########
+print "get drifter data from "+ drifter_data_type+" use %s model compare %i days" %(Model,days-1)
+if drifter_list==[]:
+    if 'ROMS' in Model and '30yr' in Model:
+        drifter_list='erddap_drifter_list_both.csv'
+    elif 'ROMS' in Model and '30yr' not in Model:
+        drifter_list='erddap_drifter_list_roms.csv'
+    elif 'ROMS' not in Model and '30yr' in Model:
+        drifter_list='erddap_drifter_list_30yr.csv'
+file_drID=[]
+if 'ROMS' in Model:
+    romstmeandis=[];romstmindis=[];romstmaxdis=[];romsdmeandis=[];romsdmindis=[];romsdmaxdis=[]
+if '30yr' in Model:
+    yrtmeandis=[];yrtmindis=[];yrtmaxdis=[];yrdmeandis=[];yrdmindis=[];yrdmaxdis=[]
+if 'GOM3' in Model:
+    gomtmeandis=[];gomtmindis=[];gomtmaxdis=[];gomdmeandis=[];gomdmindis=[];gomdmaxdis=[]
+if 'massbay' in Model:
+    masstmeandis=[];masstmindis=[];masstmaxdis=[];massdmeandis=[];massdmindis=[];massdmaxdis=[]
+#####get drifter information from file or hard code    
+if drifter_ID==[]:#get drifter information from file  
+    start_times=[]    
+    drifters = np.genfromtxt(drifter_list,dtype=None,names=['ids','start_time','days','mean','max','min','depth'],delimiter=',',skip_header=1)    
+    for i in range(len(drifters['ids'])):
+      dt_time=datetime.strptime(drifters['start_time'][i], '%Y-%m-%d'+' '+'%H:%M:%S+00:00')       
+      start_times.append(dt_time)
+else:
+    drifters=dict(ids=[],days=[])
+    drifters['ids']=drifter_ID
+    drifters['depth']=depth
+    for b in range(len(drifter_ID)):
+        drifters['days'].append(days)
+#######get drifter track
+for num in range(min(len(drifters['ids']),track)): # we limit runs to "track" drifters (typically 20) because it often bombs   
+    print 'id=',drifters['ids'][num],'index=',num
+    drifter_points = dict(ids=[],lat_hr=[],h_hr=[],lon_hr=[],lon=[],lat=[],time=[],distance=[],wdistance=[])
+    drifter_points['ids']=drifters['ids'][num]
+    if drifters['days'][num]>days:
+        drifters['days'][num]=days
+    drifter_points=get_drifter_track(drifter_data_type,start_times[num],drifters['days'][num],drifters['ids'][num]) 
+    drifter_points=drifterhr(drifter_points,drifters['days'][num]-1)
+    
+    distance=[]
+    meantimedis=[]
+    meandisdist=[] 
+    model_points =dict(lon=[],lat=[],time=[])
+# get the model track   
+    for nday in np.arange(0,drifters['days'][num]-1,restart_days): 
+        print 'nday',nday
+        modelpoints = dict(lon=[],lat=[],time=[]) 
+        wmodelpoints = dict(lon=[],lat=[],time=[])
+        start_time=drifter_points['h_hr'][nday*24]
+        end_times=drifter_points['h_hr'][(nday+track_days)*24-1]
+        i=Model[0]
+        GRIDS= ['GOM3','massbay','30yr']
+        if i in GRIDS:
+            get_obj =  get_fvcom(i)
+            url_fvcom = get_obj.get_url(start_time,end_times)                
+            b_points = get_obj.get_data(url_fvcom)     
+            modelpoints,windspeed= get_obj.get_track(drifter_points['lon_hr'][nday*24],drifter_points['lat_hr'][nday*24],drifters['depth'][num],start_time,wind,wind_get_type)
+        if i=='ROMS':        
+            get_obj = get_roms()
+            url_roms = get_obj.get_url(start_time,end_times)
+            get_obj.get_data(url_roms)
+            modelpoints ,windspeed= get_obj.get_track(drifter_points['lon_hr'][nday*24],drifter_points['lat_hr'][nday*24],drifters['depth'][num],start_time,wind,wind_get_type)
+                
+        model_points['lon'].append(modelpoints['lon']); model_points['lat'].append(modelpoints['lat']);model_points['time'].append(modelpoints['time'])
+        dist=[]
+       
+        if len(modelpoints['lon'])==24*track_days:
+            dist,meantdis,meandisdis=calculate_SD(modelpoints,drifter_points['lon_hr'][nday*24:(nday+track_days)*24],drifter_points['lat_hr'][nday*24:(nday+track_days)*24],drifter_points['h_hr'][nday*24:(nday+track_days)*24])
+            
+        else:
+            dist,meantdis,meandisdis=calculate_SD(modelpoints,drifter_points['lon_hr'][nday*24:(nday+track_days)*24],drifter_points['lat_hr'][nday*24:(nday+track_days)*24],drifter_points['h_hr'][nday*24:(nday+track_days)*24])
+       
+        distance.append(dist)#one drifter one model all distance 
+        meandisdist.append(meandisdis) #one drifter one model per day mean distance/dist                
+        meantimedis.append(meantdis)#one drifter one model per day mean distance/day
+#draw a picture of the model's track and the drifter's track
+    plt.figure(1) 
+    plt.title('id=%s drifter track vs modle=%s'%(drifters['ids'][num],Model[0]))
+    for haha in np.arange(0,drifters['days'][num]-1,restart_days): 
+        plt.plot(model_points['lon'][haha],model_points['lat'][haha],'ro-')
+    plt.plot(drifter_points['lon_hr'][0:],drifter_points['lat_hr'][0:],'bo-')
+    plt.grid(True)
+    plt.savefig('id=%s drifter track vs modle=%s start time=%s'%(drifters['ids'][num],Model[0],start_times[num]))  
+    plt.show()
+#draw a picture of distance every hour    
+    plt.figure(2)
+    plt.title('id=%s drifter  vs modle=%s distance'%(drifters['ids'][num],Model[0]))
+    for x in range(len(distance)):
+        
+        plt.plot(distance[x][:])
+        plt.text(track_days*24-3,distance[x][-1],'meandis=%.2f' %(meantimedis[x]),color='red',fontsize=12)
+    plt.ylabel('distance(km)')   
+    plt.xlabel('time')
+    
+    plt.savefig('id=%s drifter start_times=%s  vs modle=%s distance'%(drifters['ids'][num],start_times[num],Model[0]))
+    plt.show()
+# the output        
+    if Model[0] == 'ROMS':
+        romstmeandis.append(np.mean(meantimedis))
+        romstmindis.append(min(meantimedis))
+        romstmaxdis.append(max(meantimedis))
+        romsdmeandis.append(np.mean(meandisdist))
+        romsdmindis.append(min(meandisdist))
+        romsdmaxdis.append(max(meandisdist))
+    if Model[0] == '30yr':
+        yrtmeandis.append(np.mean(meantimedis))
+        yrtmindis.append(min(meantimedis))
+        yrtmaxdis.append(max(meantimedis))
+        yrdmeandis.append(np.mean(meandisdist))
+        yrdmindis.append(min(meandisdist))
+        yrdmaxdis.append(max(meandisdist))
+            
+    if Model[0] == 'GOM3':
+        gomtmeandis.append(np.mean(meantimedis))
+        gomtmindis.append(min(meantimedis))
+        gomtmaxdis.append(max(meantimedis))
+        gomdmeandis.append(np.mean(meandisdist))
+        gomdmindis.append(min(meandisdist))
+        gomdmaxdis.append(max(meandisdist))
+    if Model[0] == 'massbay':
+        masstmeandis.append(np.mean(meantimedis))
+        masstmindis.append(min(meantimedis))
+        masstmaxdis.append(max(meantimedis))
+        massdmeandis.append(np.mean(meandisdist))
+        massdmindis.append(min(meandisdist))
+        massdmaxdis.append(max(meandisdist))
+    file_drID.append(drifters['ids'][num])
+
+data=[];tdata=[];model=[]
+if 'ROMS' in Model:
+    data.append(romstmeandis);data.append(romstmindis);data.append(romstmaxdis);data.append(romsdmeandis);data.append(romsdmindis);data.append(romsdmaxdis);
+    model.append('ROMS')
+if '30yr' in Model:
+    data.append(yrtmeandis);data.append(yrtmindis);data.append(yrtmaxdis);data.append(yrdmeandis);data.append(yrdmindis);data.append(yrdmaxdis);
+    model.append('30yr')
+if 'GOM3' in Model:
+    data.append(gomtmeandis);data.append(gomtmindis);data.append(gomtmaxdis);data.append(gomdmeandis);data.append(gomdmindis);data.append(gomdmaxdis);
+    model.append('GOMS')
+if 'massbay' in Model:
+    data.append(masstmeandis);data.append(masstmindis);data.append(masstmaxdis);data.append(massdmeandis);data.append(massdmindis);data.append(massdmaxdis);
+    model.append('massbay')
+
+tdata.append(file_drID)
+for w in range(0,len(data),1):
+    ldata=[]    
+    for e in data[w]:
+        e="%.2f" %e
+        ldata.append(e)
+    tdata.append(ldata)
+            
+chat=map(list, zip(*tdata))
+ 
+csvfile = file('drifter_vs_model use hourly data.csv', 'wb')
+writer = csv.writer(csvfile)
+fh=['ids']
+for z in range(len(model)):
+    fh.append('%s_meandis(km/day)' %model[z])
+    fh.append('mindis(km)')
+    fh.append('maxdis(km)')
+    fh.append('%s_meandis(km/km)' %model[z] )
+    fh.append('mindis(km)')
+    fh.append('maxdis(km)')
+
+        
+writer.writerow(fh)
+writer.writerows(chat)
+csvfile.close()
